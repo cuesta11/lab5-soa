@@ -19,6 +19,7 @@ import org.springframework.scheduling.annotation.EnableScheduling
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 import kotlin.random.Random
 
 private val logger = LoggerFactory.getLogger("soa.CronOddEvenDemo")
@@ -44,15 +45,27 @@ class IntegrationApplication(
     fun integerSource(): AtomicInteger = AtomicInteger()
 
     /**
-     * Defines a publish-subscribe channel for even numbers.
+     * Defines a direct channel for routing incoming numbers.
+     */
+    @Bean
+    fun routingChannel() = MessageChannels.direct()
+
+    /**
+     * Defines a direct channel for even numbers.
+     */
+    @Bean
+    fun evenChannel() = MessageChannels.direct()
+
+    /**
+     * Defines a publish-subscribe channel for odd numbers.
      * Multiple subscribers can receive messages from this channel.
      */
     @Bean
-    fun evenChannel(): PublishSubscribeChannelSpec<*> = MessageChannels.publishSubscribe()
+    fun oddChannel(): PublishSubscribeChannelSpec<*> = MessageChannels.publishSubscribe()
 
     /**
-     * Main integration flow that polls the integer source and routes messages.
-     * Polls every 100ms and routes based on even/odd logic.
+     * Main integration flow that polls the integer source and sends to routing channel.
+     * Polls every 100ms and generates sequential numbers.
      */
     @Bean
     fun myFlow(integerSource: AtomicInteger): IntegrationFlow =
@@ -64,8 +77,18 @@ class IntegrationApplication(
                 logger.info("📥 Source generated number: {}", num)
                 num
             }
+            channel("routingChannel")
+        }
+
+    /**
+     * Router flow that determines whether numbers are even or odd.
+     */
+    @Bean
+    fun routerFlow(): IntegrationFlow =
+        integrationFlow("routingChannel") {
             route { p: Int ->
-                val channel = if (p % 2 == 0) "evenChannel" else "oddChannel"
+                val isEven = abs(p) % 2 == 0
+                val channel = if (isEven) "evenChannel" else "oddChannel"
                 logger.info("🔀 Router: {} → {}", p, channel)
                 channel
             }
@@ -89,17 +112,11 @@ class IntegrationApplication(
 
     /**
      * Integration flow for processing odd numbers.
-     * Applies a filter before transformation and logging.
-     * Note: Examine the filter condition carefully.
+     * Transforms integers to strings before service activator.
      */
     @Bean
     fun oddFlow(): IntegrationFlow =
         integrationFlow("oddChannel") {
-            filter { p: Int ->
-                val passes = p % 2 == 0
-                logger.info("  🔍 Odd Filter: checking {} → {}", p, if (passes) "PASS" else "REJECT")
-                passes
-            } // , { discardChannel("discardChannel") })
             transform { obj: Int ->
                 logger.info("  ⚙️  Odd Transformer: {} → 'Number {}'", obj, obj)
                 "Number $obj"
@@ -150,7 +167,7 @@ class SomeService {
  */
 @MessagingGateway
 interface SendNumber {
-    @Gateway(requestChannel = "evenChannel")
+    @Gateway(requestChannel = "routingChannel")
     fun sendNumber(number: Int)
 }
 
